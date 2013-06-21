@@ -1,0 +1,530 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+///////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2010-2011 Esri. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+///////////////////////////////////////////////////////////////////////////
+-->
+<viewer:BaseWidget xmlns:fx="http://ns.adobe.com/mxml/2009"
+                   xmlns:s="library://ns.adobe.com/flex/spark"
+                   xmlns:mx="library://ns.adobe.com/flex/mx"
+                   xmlns:viewer="com.esri.viewer.*"
+                   xmlns:Bookmark="widgets.Favourites.*"
+                   x="600" y="300"
+                   hasFocusableChildren="true"
+                   implements="mx.managers.IFocusManagerComponent"
+                   initialize="basewidget_initializeHandler()"
+                   layout="absolute"
+                   widgetConfigLoaded="basewidget_widgetConfigLoaded()">
+
+    <viewer:states>
+        <s:State name="bkmList"/>
+        <s:State name="bkmAdd"/>
+    </viewer:states>
+
+    <viewer:transitions>
+        <s:Transition autoReverse="true" toState="*">
+            <s:Fade targets="{[bkmList, bkmAdd]}"/>
+        </s:Transition>
+    </viewer:transitions>
+
+    <fx:Script>
+        <![CDATA[
+			import com.esri.ags.geometry.Extent;
+			import com.esri.ags.layers.Layer;
+			import com.esri.viewer.AppEvent;
+			
+			import mx.collections.ArrayList;
+			import mx.controls.Alert;
+			import mx.events.EffectEvent;
+			import mx.logging.ILogger;
+			import mx.logging.Log;
+			
+			import spark.components.supportClasses.ItemRenderer;
+			
+			import widgets.MapSwitcher.Basemap;
+
+            private const BOOKMARKS:String = "bookmarks";
+            private const ICON_URL:String = "assets/images/";
+
+            private var canUserAddBookmarks:Boolean = true;
+			private var loadFile:FileReference;
+			
+            // Labels
+            private var favouritesLabel:String;
+            private var shareFavouriteLabel:String;
+			private var errorLabel:String;
+            [Bindable] private var shareFavouriteText:String;  
+			[Bindable] private var loadFavouriteLabel:String;
+            [Bindable] private var emailButtonLabel:String;
+			[Bindable] private var saveButtonLabel:String;
+            
+            [Bindable]
+            private var bookmarkAL:ArrayList; // used by BookmarkDataGroup
+            private var bookmarkSO:SharedObject;
+            private var bookmarkSOAL:ArrayList; // stored in bookmarkSO
+
+            private var selectedindex:int = 0;
+            private var _logger:ILogger;
+
+            private function get logger():ILogger
+            {
+                if (_logger === null)
+                {
+                    _logger = Log.getLogger(BOOKMARKS);
+                }
+                return _logger;
+            }
+
+            private function basewidget_initializeHandler():void
+            {
+                if (isPartOfPanel) // if widget is part of "left", "right" or "bottom" panel
+                {
+                    this.percentWidth = this.percentHeight = 100;
+                    wTemplate.percentWidth = wTemplate.percentHeight = 100;
+                }
+                else
+                {
+                    wTemplate.width = wTemplate.height = 300;
+                }
+            }
+
+			// Widget loaded handler
+            private function basewidget_widgetConfigLoaded():void
+            {
+                bookmarkAL = new ArrayList();
+
+                if (configXML)
+                {
+                    assignLabels();
+                    if (configXML.addbookmarks[0])
+                    {
+                        canUserAddBookmarks = (configXML.addbookmarks == "true");
+                    }
+                }
+
+                addTitleBarButtons();
+                loadBookmarkSO();
+                loadBookmarks();
+				
+				// Get the URL
+				var url:String = ExternalInterface.call("window.location.href.toString");
+				// If syntax already provided then go to that favourite
+				if (url.indexOf("?") >= 0) {
+					var urlArray:Array = url.split("?");
+					url = urlArray[1];
+					// Go to the favourite
+					gotoFavourite(url);
+				}
+            }
+
+            private function assignLabels():void
+            {
+				favouritesLabel = configXML.labels.favouritesLabel || getDefaultString("bookmarksLabel");
+				shareFavouriteLabel = configXML.labels.shareFavouriteLabel || getDefaultString("addbookmarksLabel");
+				shareFavouriteText = configXML.labels.shareFavouriteText || "Share a favourite by entering the details below.";
+				loadFavouriteLabel = configXML.labels.loadFavouriteLabel || "Load Favourite";
+				saveButtonLabel = configXML.labels.saveButtonLabel || "Save";
+				emailButtonLabel = configXML.labels.emailButtonLabel || "Email";
+                errorLabel = configXML.labels.errorlabel || getDefaultString("bookmarkMissingNameLabel");
+            }
+
+            private function addTitleBarButtons():void
+            {
+                wTemplate.addTitlebarButton(ICON_URL + "i_bookmark.png", favouritesLabel, showBookmarksList);
+                if (canUserAddBookmarks)
+                {
+                    wTemplate.addTitlebarButton(ICON_URL + "i_bookmark_add.png", shareFavouriteLabel, showBookmarkAdd);
+                }
+            }
+
+            private function showBookmarksList():void
+            {
+                this.currentState = "bkmList";
+                wTemplate.selectedTitlebarButtonIndex = 0; // used to indicate selected titlebar button when automatically switching state
+            }
+
+            private function showBookmarkAdd():void
+            {
+                this.currentState = "bkmAdd";
+            }
+
+            private function loadBookmarkSO():void
+            {
+                try
+                {
+                    bookmarkSO = SharedObject.getLocal(BOOKMARKS);
+                }
+                catch (err:Error)
+                {
+                    if (Log.isError())
+                    {
+                        logger.error(err.toString());
+                    }
+                }
+            }
+
+            private function loadBookmarks():void
+            {
+                if (configXML)
+                {
+                    const bookmarkList:XMLList = configXML..bookmark;
+                    if (bookmarkList.length() > 0)
+                    {
+                        addXMLBookmarks(bookmarkList);
+                    }
+                }
+
+                if (bookmarkSO)
+                {
+                    bookmarkSOAL = bookmarkSO.data[BOOKMARKS] as ArrayList;
+                    if (!bookmarkSOAL)
+                    {
+                        bookmarkSOAL = new ArrayList();
+                        bookmarkSO.data[BOOKMARKS] = bookmarkSOAL;
+                    }
+                    else
+                    {
+                        bookmarkAL.addAll(bookmarkSOAL);
+                    }
+                }
+            }
+
+            private function addXMLBookmarks(bookmarkList:XMLList):void
+            {
+                var bookmark:Bookmark;
+                for each (var bookmarkXML:XML in bookmarkList)
+                {
+                    bookmark = parseBookmark(bookmarkXML);
+                    if (bookmark)
+                    {
+                        bookmarkAL.addItem(bookmark);
+                    }
+                }
+            }
+
+            private function parseBookmark(bookmarkXML:XML):Bookmark
+            {
+                var bookmark:Bookmark;
+
+                const extentCoordinates:Array = bookmarkXML.toString().split(" ");
+                const parsedXMin:Number = parseFloat(extentCoordinates[0]);
+                const parsedYMin:Number = parseFloat(extentCoordinates[1]);
+                const parsedXMax:Number = parseFloat(extentCoordinates[2]);
+                const parsedYMax:Number = parseFloat(extentCoordinates[3]);
+
+                const hasValidMinMaxCoordinates:Boolean =
+                    !isNaN(parsedXMin) && !isNaN(parsedYMin)
+                    && !isNaN(parsedXMax) && !isNaN(parsedYMax);
+
+                if (hasValidMinMaxCoordinates)
+                {
+                    bookmark = new Bookmark();
+                    bookmark.name = bookmarkXML.@name;
+                    bookmark.icon = bookmarkXML.@icon;
+
+                    bookmark.xmin = Number(parsedXMin);
+                    bookmark.ymin = Number(parsedYMin);
+                    bookmark.xmax = Number(parsedXMax);
+                    bookmark.ymax = Number(parsedYMax);
+                }
+
+                return bookmark;
+            }
+
+			// When the load favourite button is clicked
+            private function loadFavourite():void
+            {
+				// Create the FileReference instance
+				loadFile = new FileReference();
+				
+				// Listen for when they select a file
+				loadFile.addEventListener(Event.SELECT, onFileSelect);
+				
+				// Listen for when then cancel out of the browse dialog
+				loadFile.addEventListener(Event.CANCEL,onCancel);
+								
+				// File types which we want the user to open
+				var FILE_TYPES:Array = [new FileFilter("Text File", "*.txt;*.text")];
+				// Open a native browse dialog that filters for text files
+				loadFile.browse(FILE_TYPES);
+            }
+	
+			// Called when the user selects a file from the browse dialog
+			private function onFileSelect(e:Event):void
+			{
+				//listen for when the file has loaded
+				loadFile.addEventListener(Event.COMPLETE, onLoadComplete);
+
+				//load the content of the file
+				loadFile.load();
+			}
+			
+			// Called when the file has completed loading
+			private function onLoadComplete(e:Event):void
+			{
+				//get the data from the file as a ByteArray
+				var data:ByteArray = loadFile.data;
+				var favouriteText:String = data.readUTFBytes(data.bytesAvailable);
+								
+				var urlArray:Array = favouriteText.split("?");
+				favouriteText = urlArray[1];
+				
+				// Go to the favourite
+				gotoFavourite(favouriteText);
+			}
+			
+			// Called when the user cancels out of the browser dialog
+			private function onCancel(e:Event):void
+			{
+				
+			}
+			
+			// Creates the URL syntax for a favourite
+			private function getFavouriteURL():String
+			{
+				// Get the URL
+				var url:String = ExternalInterface.call("window.location.href.toString");
+				// If syntax already added on, make sure just to get page url
+				if (url.indexOf("?") >= 0) {
+					var urlArray:Array = url.split("?");
+					url = urlArray[0];
+				}
+				var favouriteURL:String = url + "?";
+				
+				// Get the current extent
+				var ext:Extent = map.extent;
+				var xmin:Number = Number(ext.xmin.toFixed(4));
+				var ymin:Number = Number(ext.ymin.toFixed(4));
+				var xmax:Number = Number(ext.xmax.toFixed(4));
+				var ymax:Number = Number(ext.ymax.toFixed(4));	
+				favouriteURL = favouriteURL + "xmin=" + xmin + "&ymin=" + ymin + "&xmax=" + xmax + "&ymax=" + ymax;
+				
+				// If layers are to be included
+				if (layersCheckbox.selected == true) {
+					var layers:String = "";
+					// Get layers that are turned on					
+					// For each layer in the map
+					for each (var id:String in map.layerIds)
+					{
+						// If layer is visible and not feature layer
+						var layer:Layer = map.getLayer(id);
+						if (layer.visible == true) {
+							if ((layer.id.indexOf("FeatureLayer") >= 0) || (layer.id.indexOf("GraphicsLayer") >= 0)) {
+								layers = layers;
+							}
+							else {
+								layers = layers + layer.id + ",";								
+							}
+						}
+					}
+					// If string includes a space replace with underscore
+					if (layers.indexOf(" ") >= 0) {
+						var reg:RegExp = / /g;						
+						layers = layers.replace(reg, "_");
+					}
+					
+					favouriteURL = favouriteURL + "&layers=" + layers
+				}
+				// Return the favourite URL
+				return favouriteURL;
+			}
+			
+			// Go to the favourite
+			private function gotoFavourite(favouriteString:String):void
+			{
+				// Sort data from url
+				var favouriteArray:Array = favouriteString.split("&");
+				var xminArray:Array = favouriteArray[0].split("=");
+				var xmin:Number = xminArray[1];
+				var yminArray:Array = favouriteArray[1].split("=");
+				var ymin:Number = yminArray[1];
+				var xmaxArray:Array = favouriteArray[2].split("=");
+				var xmax:Number = xmaxArray[1];
+				var ymaxArray:Array = favouriteArray[3].split("=");
+				var ymax:Number = ymaxArray[1];
+				
+				// Go to the extent
+				var extent:Extent = new Extent(xmin,ymin,xmax,ymax,map.spatialReference);
+				map.extent = extent;
+				
+				// Get a list of basemaps
+				var basemapsList:Array = new Array();
+				for each (var basemap:Object in configData.basemaps)
+				{
+					var label:String = basemap.label;
+					basemapsList.push(label);
+				}
+				
+				// If layers provided
+				if (favouriteArray[4]) {
+					// If string includes a underscore replace with underscore
+					if (favouriteArray[4].indexOf("_") >= 0) {
+						var reg:RegExp = /_/g;						
+						favouriteArray[4] = favouriteArray[4].replace(reg, " ");
+					}
+					
+					var layersArray:Array = favouriteArray[4].split("=");
+					var layers:Array = layersArray[1].split(",");	
+					
+					// Turn on the layers
+					var count2:int = 0;
+					while (layers.length > count2) {
+						// Check if layer is in basemaps
+						var count:int = 0;
+						while (basemapsList.length > count) {
+							if (basemapsList[count] == layers[count2]) {
+								// Turn on that basemap
+								AppEvent.dispatch(AppEvent.BASEMAP_SWITCH, count.toString());
+							}
+							count++;
+						}
+												
+						var layer:Layer = map.getLayer(layers[count2]);
+						layer.visible = true;
+						count2++;
+					}
+					
+
+					
+				}				
+			}
+			
+			// When the save favourite button is clicked
+			private function saveFavourite():void
+			{
+				// Get the URL syntax
+				var favouriteURL:String = getFavouriteURL();
+				
+				// Save the URL to a txt file
+				var fileName:String = new String();
+				if ((txtName.text != "") && (txtName.text != " ")) {
+					fileName = txtName.text + ".txt"					
+				}
+				else {
+					fileName = "YouMapFavourite.txt"
+				}
+				var fileRef:FileReference=new FileReference();
+				fileRef.save(favouriteURL, fileName);
+			}
+
+			// When the email favourite button is clicked
+			private function emailFavourite():void
+			{
+				// Get the URL syntax
+				var favouriteURL:String = getFavouriteURL();
+				
+				// Setup email details and open email client
+				var mailMsg:URLRequest = new URLRequest('mailto:');
+				var variables:URLVariables = new URLVariables();  
+				
+				var subjectName:String = new String();
+				if ((txtName.text != "") && (txtName.text != " ")) {
+					subjectName = "YouMap - Shared Favourite: " + txtName.text;				
+				}
+				else {
+					subjectName = "YouMap - Shared Favourite";
+				}				
+				variables.subject = subjectName;
+				variables.body = "Click on this link - " + favouriteURL;
+				mailMsg.data = variables;
+				mailMsg.method = URLRequestMethod.GET;
+				navigateToURL(mailMsg, "_self");
+			}
+			
+            private function bkmList_effectEndHandler(event:EffectEvent):void
+            {
+                bkmList.removeEventListener(EffectEvent.EFFECT_END, bkmList_effectEndHandler);
+                // scroll to the bottom
+                bookmarkDG.ensureIndexIsVisible(bookmarkAL.length - 1);
+            }
+
+
+            private function showBookmark(event:Event):void
+            {
+                var bookmark:Bookmark = ItemRenderer(event.target).data as Bookmark;
+                if (bookmark)
+                {
+                    map.extent = new Extent(bookmark.xmin, bookmark.ymin, bookmark.xmax, bookmark.ymax);
+                }
+            }
+        ]]>
+    </fx:Script>
+
+    <viewer:WidgetTemplate id="wTemplate">
+		
+        <s:Group id="bkmList"
+                 width="100%" height="100%"
+                 visible="false"
+                 visible.bkmList="true">
+            <Bookmark:BookmarkDataGroup id="bookmarkDG"
+                                        width="100%" height="100%"
+                                        bookmarkClick="showBookmark(event)"
+                                        borderVisible="false"
+                                        contentBackgroundAlpha="0"
+                                        dataProvider="{bookmarkAL}">
+                <Bookmark:layout>
+                    <s:VerticalLayout gap="2"
+                                      horizontalAlign="justify"
+                                      useVirtualLayout="true"/>
+                </Bookmark:layout>
+            </Bookmark:BookmarkDataGroup>
+        </s:Group>
+		<s:Group id="bkmListButtons"				 
+				 bottom="10"
+				 visible="false"
+				 visible.bkmList="true">
+			<s:layout>
+				<s:HorizontalLayout gap="10"
+									horizontalAlign="left"
+									paddingTop="10"/>
+			</s:layout>			
+			<s:Button click="loadFavourite()" label="{loadFavouriteLabel}"/>
+		</s:Group>			
+		
+		
+		
+        <s:Group id="bkmAdd"
+                 width="100%" height="100%"
+                 visible="false"
+                 visible.bkmAdd="true">
+            <s:layout>
+                <s:VerticalLayout gap="10"
+                                  horizontalAlign="center"
+                                  paddingTop="10"/>
+            </s:layout>
+            <s:Label width="100%" text="{shareFavouriteText}"/>
+			
+			<mx:FormItem label="Name:">
+				<mx:TextInput id="txtName" width="200"/>
+			</mx:FormItem>	
+			<mx:FormItem>
+				<s:CheckBox id="layersCheckbox" label="Include Layers" selected="true"/>
+			</mx:FormItem>	
+        </s:Group>		
+		<s:Group id="bkmAddButtons"				 
+				 bottom="10"
+				 visible="false"
+				 visible.bkmAdd="true">
+			<s:layout>
+				<s:HorizontalLayout gap="10"
+								  horizontalAlign="left"
+								  paddingTop="10"/>
+			</s:layout>			
+			<s:Button click="saveFavourite()" label="{saveButtonLabel}"/>
+			<s:Button click="emailFavourite()" label="{emailButtonLabel}"/>
+		</s:Group>			
+    </viewer:WidgetTemplate>
+
+</viewer:BaseWidget>

@@ -1,0 +1,22 @@
+<?xml version="1.0" ?>
+<configuration>
+    <bookmarks>
+		<bookmark name="Wellington">1742418 5424692 1754324 5432629</bookmark>
+		<bookmark name="Auckland">1725708 5897361 1785240 5937048</bookmark>
+		<bookmark name="Christchurch">1555102 5171515 1584867 5191358</bookmark>    
+    </bookmarks>
+    
+<labels>
+<favouritesLabel>Favourites</favouritesLabel>
+<shareFavouriteLabel>Share Favourite</shareFavouriteLabel>
+<shareFavouriteText>Share a favourite by entering the details below.</shareFavouriteText>
+<loadButtonLabel>Load Favourite</loadButtonLabel>
+<emailButtonLabel>Email</emailButtonLabel>
+<saveButtonLabel>Save</saveButtonLabel>
+</labels>    
+</configuration>
+
+<!--
+    See Bookmark widget tag reference at
+    http://links.esri.com/bookmarkwidget
+-->
